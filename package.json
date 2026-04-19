@@ -1,0 +1,121 @@
+{
+  "name": "text-reader",
+  "displayName": "Text Reader",
+  "description": "テキストファイルの内容を日本語で読み上げるVS Code拡張機能",
+  "version": "0.0.1",
+  "publisher": "text-reader",
+  "engines": {
+    "vscode": "^1.116.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [],
+  "main": "./out/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "text-reader",
+          "title": "Text Reader",
+          "icon": "$(unmute)"
+        }
+      ]
+    },
+    "views": {
+      "text-reader": [
+        {
+          "type": "webview",
+          "id": "text-reader.view",
+          "name": "プレーヤー"
+        },
+        {
+          "id": "text-reader.files",
+          "name": "ファイル"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "text-reader.selectFile",
+        "title": "Text Reader: ファイルを選択"
+      },
+      {
+        "command": "text-reader.openFile",
+        "title": "Text Reader: ファイルを開く"
+      },
+      {
+        "command": "text-reader.refreshFiles",
+        "title": "更新",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "text-reader.readAll",
+        "title": "Text Reader: ファイル全体を読み上げ"
+      },
+      {
+        "command": "text-reader.readFromCursor",
+        "title": "Text Reader: カーソル位置から読み上げ"
+      },
+      {
+        "command": "text-reader.pauseResume",
+        "title": "Text Reader: 一時停止/再開"
+      },
+      {
+        "command": "text-reader.stop",
+        "title": "Text Reader: 停止"
+      },
+      {
+        "command": "text-reader.setSpeed",
+        "title": "Text Reader: 読み上げ速度を設定"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "text-reader.refreshFiles",
+          "when": "view == text-reader.files",
+          "group": "navigation"
+        }
+      ]
+    },
+    "keybindings": [
+      {
+        "command": "text-reader.readAll",
+        "key": "ctrl+alt+r",
+        "when": "editorTextFocus"
+      },
+      {
+        "command": "text-reader.readFromCursor",
+        "key": "ctrl+alt+shift+r",
+        "when": "editorTextFocus"
+      },
+      {
+        "command": "text-reader.pauseResume",
+        "key": "ctrl+alt+p"
+      },
+      {
+        "command": "text-reader.stop",
+        "key": "ctrl+alt+s"
+      }
+    ]
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "pretest": "npm run compile && npm run lint",
+    "lint": "eslint src",
+    "test": "vscode-test"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.116.0",
+    "@types/mocha": "^10.0.10",
+    "@types/node": "22.x",
+    "typescript-eslint": "^8.56.1",
+    "eslint": "^9.39.3",
+    "typescript": "^5.9.3",
+    "@vscode/test-cli": "^0.0.12",
+    "@vscode/test-electron": "^2.5.2"
+  }
+}

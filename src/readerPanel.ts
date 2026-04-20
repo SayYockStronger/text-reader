@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { convertToReading } from './tokenizer';
 
 export class ReaderViewProvider implements vscode.WebviewViewProvider {
 	public static readonly viewType = 'text-reader.view';
@@ -56,7 +57,8 @@ export class ReaderViewProvider implements vscode.WebviewViewProvider {
 	}
 
 	read(text: string) {
-		this.view?.webview.postMessage({ type: 'read', text, speed: this.speed });
+		const converted = convertToReading(text);
+		this.view?.webview.postMessage({ type: 'read', text: converted, originalText: text, speed: this.speed });
 	}
 
 	pauseResume() {
@@ -84,6 +86,24 @@ export class ReaderViewProvider implements vscode.WebviewViewProvider {
 	}
 
 	private handleReadRequest(mode: 'all' | 'cursor') {
+		// For cursor mode, always use the active editor's cursor position
+		if (mode === 'cursor') {
+			const editor = vscode.window.activeTextEditor || this.lastEditor;
+			if (!editor) {
+				vscode.window.showWarningMessage('カーソル位置を取得できません。エディタでファイルを開いてください。');
+				return;
+			}
+			const lineStart = editor.document.lineAt(editor.selection.active.line).range.start;
+			const cursorOffset = editor.document.offsetAt(lineStart);
+			const text = editor.document.getText().substring(cursorOffset);
+			if (!text.trim()) {
+				vscode.window.showWarningMessage('読み上げるテキストがありません。');
+				return;
+			}
+			const converted = convertToReading(text);
+			this.view?.webview.postMessage({ type: 'read', text: converted, originalText: text, speed: this.speed });
+			return;
+		}
 		// Prefer selected file from explorer, fallback to active editor
 		if (this.selectedFileText) {
 			const text = this.selectedFileText;
@@ -91,7 +111,8 @@ export class ReaderViewProvider implements vscode.WebviewViewProvider {
 				vscode.window.showWarningMessage('読み上げるテキストがありません。');
 				return;
 			}
-			this.view?.webview.postMessage({ type: 'read', text, speed: this.speed });
+			const converted = convertToReading(text);
+			this.view?.webview.postMessage({ type: 'read', text: converted, originalText: text, speed: this.speed });
 			return;
 		}
 		const editor = vscode.window.activeTextEditor || this.lastEditor;
@@ -99,19 +120,13 @@ export class ReaderViewProvider implements vscode.WebviewViewProvider {
 			vscode.window.showWarningMessage('ファイルを選択してください。');
 			return;
 		}
-		let text: string;
-		if (mode === 'cursor') {
-			const lineStart = editor.document.lineAt(editor.selection.active.line).range.start;
-			const cursorOffset = editor.document.offsetAt(lineStart);
-			text = editor.document.getText().substring(cursorOffset);
-		} else {
-			text = editor.document.getText();
-		}
-		if (!text.trim()) {
+		const allText = editor.document.getText();
+		if (!allText.trim()) {
 			vscode.window.showWarningMessage('読み上げるテキストがありません。');
 			return;
 		}
-		this.view?.webview.postMessage({ type: 'read', text, speed: this.speed });
+		const convertedAll = convertToReading(allText);
+		this.view?.webview.postMessage({ type: 'read', text: convertedAll, originalText: allText, speed: this.speed });
 	}
 
 	private updateStatusBar(state: string) {
@@ -294,6 +309,7 @@ export class ReaderViewProvider implements vscode.WebviewViewProvider {
 		const vscode = acquireVsCodeApi();
 
 		let chunks = [];
+		let displayChunks = [];
 		let currentIndex = 0;
 		let isSpeaking = false;
 		let isPaused = false;
@@ -421,8 +437,8 @@ export class ReaderViewProvider implements vscode.WebviewViewProvider {
 			} else {
 				progressEl.textContent = '';
 			}
-			if (currentIndex < chunks.length) {
-				textPreviewEl.textContent = chunks[currentIndex];
+			if (currentIndex < displayChunks.length) {
+				textPreviewEl.textContent = displayChunks[currentIndex];
 			} else {
 				textPreviewEl.textContent = '';
 			}
@@ -484,11 +500,12 @@ export class ReaderViewProvider implements vscode.WebviewViewProvider {
 			updateProgress();
 		}
 
-		function startReading(text, speed) {
+		function startReading(text, originalText, speed) {
 			generation++;
 			currentSpeed = speed;
 			speedEl.value = String(speed);
 			chunks = splitText(preprocessText(text));
+			displayChunks = splitText(originalText || text);
 			currentIndex = 0;
 			isSpeaking = true;
 			isPaused = false;
@@ -523,7 +540,7 @@ export class ReaderViewProvider implements vscode.WebviewViewProvider {
 			var message = event.data;
 			switch (message.type) {
 				case 'read':
-					startReading(message.text, message.speed);
+					startReading(message.text, message.originalText, message.speed);
 					break;
 				case 'pauseResume':
 					togglePauseResume();

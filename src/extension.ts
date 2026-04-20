@@ -1,8 +1,16 @@
 import * as vscode from 'vscode';
 import { ReaderViewProvider } from './readerPanel';
 import { FileExplorerProvider } from './fileExplorer';
+import { initTokenizer, isTokenizerReady } from './tokenizer';
 
 export function activate(context: vscode.ExtensionContext) {
+	// kuromoji 辞書を非同期に初期化
+	initTokenizer(context.extensionPath).then(() => {
+		vscode.window.setStatusBarMessage('Text Reader: 辞書を読み込みました', 3000);
+	}).catch(err => {
+		vscode.window.showWarningMessage(`Text Reader: 辞書の読み込みに失敗しました: ${err.message}`);
+	});
+
 	const statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
 	statusBarItem.command = 'text-reader.pauseResume';
 	statusBarItem.text = '$(unmute) Text Reader';

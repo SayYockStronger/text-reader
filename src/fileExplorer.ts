@@ -1,5 +1,4 @@
 import * as vscode from 'vscode';
-import * as path from 'path';
 
 export class FileExplorerProvider implements vscode.TreeDataProvider<FileItem> {
 	private _onDidChangeTreeData = new vscode.EventEmitter<FileItem | undefined>();

@@ -287,6 +287,10 @@ export class ReaderViewProvider implements vscode.WebviewViewProvider {
 		<button id="nextBtn" disabled>次の行 ▶</button>
 	</div>
 	<div class="controls">
+		<label class="label" for="voiceSelect">音声:</label>
+		<select id="voiceSelect"><option value="">読み込み中...</option></select>
+	</div>
+	<div class="controls">
 		<label class="label" for="speedSelect">速度:</label>
 		<select id="speedSelect">
 			<option value="1">1.0x</option>
@@ -316,11 +320,13 @@ export class ReaderViewProvider implements vscode.WebviewViewProvider {
 		let currentSpeed = 1.0;
 		let generation = 0;
 		let jaVoice = null;
+		let jaVoices = [];
 		let currentVolume = 1.0;
 		let currentUtterance = null;
 
 		const statusEl = document.getElementById('status');
 		const speedEl = document.getElementById('speedSelect');
+		const voiceEl = document.getElementById('voiceSelect');
 		const pauseBtn = document.getElementById('pauseResumeBtn');
 		const stopBtn = document.getElementById('stopBtn');
 		const prevBtn = document.getElementById('prevBtn');
@@ -333,15 +339,32 @@ export class ReaderViewProvider implements vscode.WebviewViewProvider {
 
 		function loadVoices() {
 			const voices = speechSynthesis.getVoices();
-			jaVoice = voices.find(v => v.lang === 'ja-JP')
-				|| voices.find(v => v.lang.startsWith('ja'))
-				|| null;
+			jaVoices = voices.filter(v => v.lang === 'ja-JP' || v.lang.startsWith('ja'));
+			if (jaVoices.length === 0) {
+				jaVoices = voices;
+			}
+			var prevValue = voiceEl.value;
+			voiceEl.innerHTML = '';
+			for (var i = 0; i < jaVoices.length; i++) {
+				var opt = document.createElement('option');
+				opt.value = String(i);
+				opt.textContent = jaVoices[i].name;
+				voiceEl.appendChild(opt);
+			}
+			if (prevValue && prevValue < jaVoices.length) {
+				voiceEl.value = prevValue;
+			}
+			jaVoice = jaVoices[parseInt(voiceEl.value)] || null;
 		}
 
 		loadVoices();
 		if (typeof speechSynthesis !== 'undefined' && speechSynthesis.onvoiceschanged !== undefined) {
 			speechSynthesis.addEventListener('voiceschanged', loadVoices);
 		}
+
+		voiceEl.addEventListener('change', function() {
+			jaVoice = jaVoices[parseInt(voiceEl.value)] || null;
+		});
 
 		function preprocessText(text) {
 			// URLを「リンク」に置換

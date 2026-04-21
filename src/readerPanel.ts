@@ -1,5 +1,15 @@
 import * as vscode from 'vscode';
 import { convertToReading } from './tokenizer';
+import { PlayerPreferences, ReaderSettings, UserDictionaryEntry } from './settingsStore';
+
+interface ReaderViewDependencies {
+	getSettings: () => ReaderSettings;
+	getDictionary: () => UserDictionaryEntry[];
+	getPlayerPreferences: () => PlayerPreferences;
+	savePlayerPreferences: (next: PlayerPreferences) => Promise<void>;
+	onOpenAdvancedSettings: () => void;
+	onOpenUserDictionary: () => void;
+}
 
 export class ReaderViewProvider implements vscode.WebviewViewProvider {
 	public static readonly viewType = 'text-reader.view';
@@ -11,9 +21,19 @@ export class ReaderViewProvider implements vscode.WebviewViewProvider {
 	private editorListener: vscode.Disposable;
 	private selectedFileText: string | undefined;
 	private selectedFilePath: string | undefined;
+	private voiceURI: string = '';
+	private volume: number = 100;
 
-	constructor(private readonly context: vscode.ExtensionContext, statusBarItem: vscode.StatusBarItem) {
+	constructor(
+		private readonly context: vscode.ExtensionContext,
+		statusBarItem: vscode.StatusBarItem,
+		private readonly deps: ReaderViewDependencies
+	) {
 		this.statusBarItem = statusBarItem;
+		const prefs = this.deps.getPlayerPreferences();
+		this.speed = prefs.speed;
+		this.volume = prefs.volume;
+		this.voiceURI = prefs.voiceURI;
 
 		this.lastEditor = vscode.window.activeTextEditor;
 		this.editorListener = vscode.window.onDidChangeActiveTextEditor(editor => {
@@ -43,6 +63,15 @@ export class ReaderViewProvider implements vscode.WebviewViewProvider {
 					break;
 				case 'speedChanged':
 					this.speed = message.speed;
+					void this.persistPlayerPreferences();
+					break;
+				case 'volumeChanged':
+					this.volume = message.volume;
+					void this.persistPlayerPreferences();
+					break;
+				case 'voiceChanged':
+					this.voiceURI = message.voiceURI;
+					void this.persistPlayerPreferences();
 					break;
 				case 'requestReadAll':
 					this.handleReadRequest('all');
@@ -50,15 +79,36 @@ export class ReaderViewProvider implements vscode.WebviewViewProvider {
 				case 'requestReadFromCursor':
 					this.handleReadRequest('cursor');
 					break;
+				case 'openAdvancedSettings':
+					this.deps.onOpenAdvancedSettings();
+					break;
+				case 'openUserDictionary':
+					this.deps.onOpenUserDictionary();
+					break;
 			}
+		});
+
+		webviewView.webview.postMessage({
+			type: 'initializePlayerPreferences',
+			speed: this.speed,
+			volume: this.volume,
+			voiceURI: this.voiceURI
 		});
 
 		this.statusBarItem.show();
 	}
 
 	read(text: string) {
-		const converted = convertToReading(text);
-		this.view?.webview.postMessage({ type: 'read', text: converted, originalText: text, speed: this.speed });
+		const prepared = this.prepareText(text);
+		const settings = this.deps.getSettings();
+		this.view?.webview.postMessage({
+			type: 'read',
+			text: prepared.converted,
+			originalText: prepared.original,
+			speed: this.speed,
+			pauseAsMaEnabled: settings.pauseAsMaEnabled,
+			pauseDurationMs: settings.pauseDurationMs
+		});
 	}
 
 	pauseResume() {
@@ -72,6 +122,7 @@ export class ReaderViewProvider implements vscode.WebviewViewProvider {
 	setSpeed(speed: number) {
 		this.speed = speed;
 		this.view?.webview.postMessage({ type: 'setSpeed', speed });
+		void this.persistPlayerPreferences();
 	}
 
 	setSelectedFile(filePath: string, text: string) {
@@ -100,8 +151,16 @@ export class ReaderViewProvider implements vscode.WebviewViewProvider {
 				vscode.window.showWarningMessage('読み上げるテキストがありません。');
 				return;
 			}
-			const converted = convertToReading(text);
-			this.view?.webview.postMessage({ type: 'read', text: converted, originalText: text, speed: this.speed });
+			const prepared = this.prepareText(text);
+			const settings = this.deps.getSettings();
+			this.view?.webview.postMessage({
+				type: 'read',
+				text: prepared.converted,
+				originalText: prepared.original,
+				speed: this.speed,
+				pauseAsMaEnabled: settings.pauseAsMaEnabled,
+				pauseDurationMs: settings.pauseDurationMs
+			});
 			return;
 		}
 		// Prefer selected file from explorer, fallback to active editor
@@ -111,8 +170,16 @@ export class ReaderViewProvider implements vscode.WebviewViewProvider {
 				vscode.window.showWarningMessage('読み上げるテキストがありません。');
 				return;
 			}
-			const converted = convertToReading(text);
-			this.view?.webview.postMessage({ type: 'read', text: converted, originalText: text, speed: this.speed });
+			const prepared = this.prepareText(text);
+			const settings = this.deps.getSettings();
+			this.view?.webview.postMessage({
+				type: 'read',
+				text: prepared.converted,
+				originalText: prepared.original,
+				speed: this.speed,
+				pauseAsMaEnabled: settings.pauseAsMaEnabled,
+				pauseDurationMs: settings.pauseDurationMs
+			});
 			return;
 		}
 		const editor = vscode.window.activeTextEditor || this.lastEditor;
@@ -125,8 +192,60 @@ export class ReaderViewProvider implements vscode.WebviewViewProvider {
 			vscode.window.showWarningMessage('読み上げるテキストがありません。');
 			return;
 		}
-		const convertedAll = convertToReading(allText);
-		this.view?.webview.postMessage({ type: 'read', text: convertedAll, originalText: allText, speed: this.speed });
+		const prepared = this.prepareText(allText);
+		const settings = this.deps.getSettings();
+		this.view?.webview.postMessage({
+			type: 'read',
+			text: prepared.converted,
+			originalText: prepared.original,
+			speed: this.speed,
+			pauseAsMaEnabled: settings.pauseAsMaEnabled,
+			pauseDurationMs: settings.pauseDurationMs
+		});
+	}
+
+	private prepareText(input: string): { original: string; converted: string } {
+		const settings = this.deps.getSettings();
+		const filtered = this.filterExcludedLines(input, settings.skipLinePrefix);
+		const dictionaryApplied = this.applyUserDictionary(filtered, this.deps.getDictionary());
+		const replaced = convertToReading(dictionaryApplied);
+		return {
+			original: filtered,
+			converted: replaced
+		};
+	}
+
+	private filterExcludedLines(text: string, prefix: string): string {
+		const prefixes = prefix
+			.split(',')
+			.map((part) => part.trim())
+			.filter((part) => Boolean(part));
+		if (prefixes.length === 0) {
+			return text;
+		}
+		const lines = text
+			.split('\n')
+			.filter((line) => !prefixes.some((item) => line.startsWith(item)));
+		return lines.join('\n');
+	}
+
+	private applyUserDictionary(text: string, entries: UserDictionaryEntry[]): string {
+		let result = text;
+		for (const entry of entries) {
+			if (!entry.kanji || !entry.reading) {
+				continue;
+			}
+			result = result.split(entry.kanji).join(entry.reading);
+		}
+		return result;
+	}
+
+	private async persistPlayerPreferences(): Promise<void> {
+		await this.deps.savePlayerPreferences({
+			speed: this.speed,
+			volume: this.volume,
+			voiceURI: this.voiceURI
+		});
 	}
 
 	private updateStatusBar(state: string) {
@@ -140,7 +259,7 @@ export class ReaderViewProvider implements vscode.WebviewViewProvider {
 				this.statusBarItem.tooltip = 'クリックで再開';
 				break;
 			case 'stopped':
-				this.statusBarItem.text = '$(unmute) Text Reader';
+				this.statusBarItem.text = '$(unmute) 日本語読み上げ';
 				this.statusBarItem.tooltip = 'テキスト読み上げ';
 				break;
 		}
@@ -156,10 +275,22 @@ export class ReaderViewProvider implements vscode.WebviewViewProvider {
 	<meta name="viewport" content="width=device-width, initial-scale=1.0">
 	<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${cspSource} 'nonce-${nonce}'; script-src 'nonce-${nonce}';">
 	<style nonce="${nonce}">
+		html, body {
+			height: 100%;
+		}
 		body {
 			padding: 12px;
+			box-sizing: border-box;
 			font-family: var(--vscode-font-family);
 			color: var(--vscode-foreground);
+			display: flex;
+			flex-direction: column;
+			margin: 0;
+			overflow: hidden;
+		}
+		.main-content {
+			overflow-y: auto;
+			padding-right: 2px;
 		}
 		.status {
 			font-size: 13px;
@@ -272,47 +403,58 @@ export class ReaderViewProvider implements vscode.WebviewViewProvider {
 			white-space: pre-wrap;
 			word-wrap: break-word;
 		}
+		.footer-actions {
+			margin-top: auto;
+			padding-top: 10px;
+			display: flex;
+			gap: 6px;
+			flex-wrap: wrap;
+			border-top: 1px solid var(--vscode-panel-border);
+			background: var(--vscode-sideBar-background);
+		}
 	</style>
 </head>
 <body>
-	<div id="selectedFile" class="selected-file">ファイル未選択（左のエクスプローラーから選択）</div>
-	<div class="controls">
-		<button id="readAllBtn">最初から読み上げ</button>
-		<button id="readFromCursorBtn">カーソルから読み上げ</button>
+	<div class="main-content">
+		<div id="selectedFile" class="selected-file">ファイル未選択（左のエクスプローラーから選択）</div>
+		<div class="controls">
+			<button id="readAllBtn">最初から読み上げ</button>
+			<button id="readFromCursorBtn">カーソルから読み上げ</button>
+		</div>
+		<div id="status" class="status">待機中</div>
+		<div class="controls">
+			<button id="pauseResumeBtn" disabled>一時停止</button>
+			<button id="stopBtn" disabled>停止</button>
+			<button id="prevBtn" disabled>◀ 前の行</button>
+			<button id="nextBtn" disabled>次の行 ▶</button>
+		</div>
+		<div class="controls">
+			<label class="label" for="voiceSelect">音声:</label>
+			<select id="voiceSelect"><option value="">読み込み中...</option></select>
+		</div>
+		<div class="controls">
+			<label class="label" for="speedSelect">速度:</label>
+			<select id="speedSelect">
+				<option value="1">1.0x</option>
+				<option value="2">2.0x</option>
+				<option value="3">3.0x</option>
+				<option value="4">4.0x</option>
+				<option value="5">5.0x</option>
+			</select>
+		</div>
+		<div class="volume-row">
+			<label class="label" for="volumeRange">音量:</label>
+			<input type="range" id="volumeRange" min="0" max="100" value="100" step="1">
+			<span id="volumeValue" class="volume-value">100%</span>
+		</div>
+		<div id="progress" class="progress"></div>
+		<div class="label">読み上げ中のテキスト:</div>
+		<div id="textPreview" class="text-preview"></div>
 	</div>
-	<div id="status" class="status">待機中</div>
-	<div class="controls">
-		<button id="pauseResumeBtn" disabled>一時停止</button>
-		<button id="stopBtn" disabled>停止</button>
-		<button id="prevBtn" disabled>◀ 前の行</button>
-		<button id="nextBtn" disabled>次の行 ▶</button>
+	<div class="footer-actions">
+		<button id="openAdvancedSettingsBtn">詳細設定</button>
+		<button id="openUserDictionaryBtn">ユーザー辞書</button>
 	</div>
-	<div class="controls">
-		<label class="label" for="voiceSelect">音声:</label>
-		<select id="voiceSelect"><option value="">読み込み中...</option></select>
-	</div>
-	<div class="controls">
-		<label class="label" for="speedSelect">速度:</label>
-		<select id="speedSelect">
-			<option value="1">1.0x</option>
-			<option value="1.25">1.25x</option>
-			<option value="1.5">1.5x</option>
-			<option value="1.75">1.75x</option>
-			<option value="2">2.0x</option>
-			<option value="2.25">2.25x</option>
-			<option value="2.5">2.5x</option>
-			<option value="2.75">2.75x</option>
-			<option value="3">3.0x</option>
-		</select>
-	</div>
-	<div class="volume-row">
-		<label class="label" for="volumeRange">音量:</label>
-		<input type="range" id="volumeRange" min="0" max="100" value="100" step="1">
-		<span id="volumeValue" class="volume-value">100%</span>
-	</div>
-	<div id="progress" class="progress"></div>
-	<div class="label">読み上げ中のテキスト:</div>
-	<div id="textPreview" class="text-preview"></div>
 	<script nonce="${nonce}">
 	(function() {
 		const vscode = acquireVsCodeApi();
@@ -328,6 +470,9 @@ export class ReaderViewProvider implements vscode.WebviewViewProvider {
 		let jaVoices = [];
 		let currentVolume = 1.0;
 		let currentUtterance = null;
+		let pauseAsMaEnabled = true;
+		let pauseDurationMs = 500;
+		let preferredVoiceURI = '';
 
 		const statusEl = document.getElementById('status');
 		const speedEl = document.getElementById('speedSelect');
@@ -372,10 +517,29 @@ export class ReaderViewProvider implements vscode.WebviewViewProvider {
 				opt.textContent = jaVoices[i].name;
 				voiceEl.appendChild(opt);
 			}
-			if (prevValue && prevValue < jaVoices.length) {
+			if (preferredVoiceURI) {
+				var preferredIndex = -1;
+				for (var j = 0; j < jaVoices.length; j++) {
+					if (jaVoices[j].voiceURI === preferredVoiceURI) {
+						preferredIndex = j;
+						break;
+					}
+				}
+				if (preferredIndex >= 0) {
+					voiceEl.value = String(preferredIndex);
+				}
+			} else if (prevValue && parseInt(prevValue, 10) < jaVoices.length) {
 				voiceEl.value = prevValue;
 			}
-			jaVoice = jaVoices[parseInt(voiceEl.value)] || null;
+			var selectedIndex = parseInt(voiceEl.value, 10);
+			if (Number.isNaN(selectedIndex)) {
+				selectedIndex = 0;
+				voiceEl.value = '0';
+			}
+			jaVoice = jaVoices[selectedIndex] || null;
+			if (jaVoice) {
+				preferredVoiceURI = jaVoice.voiceURI || '';
+			}
 		}
 
 		loadVoices();
@@ -384,7 +548,10 @@ export class ReaderViewProvider implements vscode.WebviewViewProvider {
 		}
 
 		voiceEl.addEventListener('change', function() {
-			jaVoice = jaVoices[parseInt(voiceEl.value)] || null;
+			var selectedIndex = parseInt(voiceEl.value, 10);
+			jaVoice = jaVoices[selectedIndex] || null;
+			preferredVoiceURI = jaVoice && jaVoice.voiceURI ? jaVoice.voiceURI : '';
+			vscode.postMessage({ type: 'voiceChanged', voiceURI: preferredVoiceURI });
 		});
 
 		function preprocessText(text) {
@@ -413,7 +580,6 @@ export class ReaderViewProvider implements vscode.WebviewViewProvider {
 			text = text.replace(/\u2191/g, '');
 			text = text.replace(/\u2193/g, '');
 			text = text.replace(/\u203b/g, '');
-			text = text.replace(/\u2026/g, '');
 			text = text.replace(/\u301c/g, '');
 			text = text.replace(/&/g, '\u30a2\u30f3\u30c9');
 			text = text.replace(/#/g, '\u30ca\u30f3\u30d0\u30fc');
@@ -429,16 +595,43 @@ export class ReaderViewProvider implements vscode.WebviewViewProvider {
 			return text;
 		}
 
-		function splitText(text) {
+		function splitText(text, enablePause, pauseMs) {
 			const lines = text.split(/\\n/);
 			const result = [];
+			const pauseToken = '__TR_PAUSE_' + pauseMs + '__';
 			for (const line of lines) {
 				const trimmed = line.trim();
 				if (trimmed) {
-					result.push(trimmed);
+					if (!enablePause) {
+						result.push(trimmed);
+						continue;
+					}
+					const marked = trimmed.replace(/(……+|――+)/g, '__TR_PAUSE__');
+					const parts = marked.split('__TR_PAUSE__');
+					for (let i = 0; i < parts.length; i++) {
+						const part = parts[i].trim();
+						if (part) {
+							result.push(part);
+						}
+						if (i < parts.length - 1) {
+							result.push(pauseToken);
+						}
+					}
 				}
 			}
 			return result.length > 0 ? result : [text.trim()];
+		}
+
+		function isPauseToken(chunk) {
+			return /^__TR_PAUSE_[0-9]+__$/.test(chunk);
+		}
+
+		function getPauseDuration(chunk) {
+			const matched = chunk.match(/^__TR_PAUSE_([0-9]+)__$/);
+			if (!matched) {
+				return pauseDurationMs;
+			}
+			return parseInt(matched[1], 10);
 		}
 
 		function updateUI(state) {
@@ -482,7 +675,11 @@ export class ReaderViewProvider implements vscode.WebviewViewProvider {
 				progressEl.textContent = '';
 			}
 			if (currentIndex < displayChunks.length) {
-				textPreviewEl.textContent = displayChunks[currentIndex];
+				if (isPauseToken(displayChunks[currentIndex])) {
+					textPreviewEl.textContent = '（間）';
+				} else {
+					textPreviewEl.textContent = displayChunks[currentIndex];
+				}
 			} else {
 				textPreviewEl.textContent = '';
 			}
@@ -523,6 +720,19 @@ export class ReaderViewProvider implements vscode.WebviewViewProvider {
 				statusEl.textContent = 'エラー: 音声合成が利用できません';
 				statusEl.className = 'status';
 				isSpeaking = false;
+				return;
+			}
+
+			if (isPauseToken(chunks[currentIndex])) {
+				const delay = getPauseDuration(chunks[currentIndex]);
+				setTimeout(function() {
+					if (gen !== generation) {
+						return;
+					}
+					currentIndex++;
+					updateProgress();
+					speakNext();
+				}, delay);
 				return;
 			}
 
@@ -594,12 +804,14 @@ export class ReaderViewProvider implements vscode.WebviewViewProvider {
 			updateProgress();
 		}
 
-		function startReading(text, originalText, speed) {
+		function startReading(text, originalText, speed, enablePauseAsMa, pauseMs) {
 			generation++;
 			currentSpeed = speed;
+			pauseAsMaEnabled = enablePauseAsMa;
+			pauseDurationMs = pauseMs;
 			speedEl.value = String(speed);
-			chunks = splitText(preprocessText(text));
-			displayChunks = splitText(originalText || text);
+			chunks = splitText(preprocessText(text), pauseAsMaEnabled, pauseDurationMs);
+			displayChunks = splitText(originalText || text, pauseAsMaEnabled, pauseDurationMs);
 			currentIndex = 0;
 			isSpeaking = true;
 			isPaused = false;
@@ -634,7 +846,13 @@ export class ReaderViewProvider implements vscode.WebviewViewProvider {
 			var message = event.data;
 			switch (message.type) {
 				case 'read':
-					startReading(message.text, message.originalText, message.speed);
+					startReading(
+						message.text,
+						message.originalText,
+						message.speed,
+						message.pauseAsMaEnabled,
+						message.pauseDurationMs
+					);
 					break;
 				case 'pauseResume':
 					togglePauseResume();
@@ -645,6 +863,20 @@ export class ReaderViewProvider implements vscode.WebviewViewProvider {
 				case 'setSpeed':
 					currentSpeed = message.speed;
 					speedEl.value = String(message.speed);
+					break;
+				case 'initializePlayerPreferences':
+					currentSpeed = message.speed;
+					speedEl.value = String(message.speed);
+					var volume = parseInt(String(message.volume), 10);
+					if (Number.isNaN(volume)) {
+						volume = 100;
+					}
+					volume = Math.max(0, Math.min(100, volume));
+					currentVolume = volume / 100;
+					volumeRange.value = String(volume);
+					volumeValueEl.textContent = String(volume) + '%';
+					preferredVoiceURI = message.voiceURI || '';
+					loadVoices();
 					break;
 				case 'fileSelected':
 					selectedFileEl.innerHTML = '\u9078\u629e\u4e2d: <span class=\"filename\">' + escapeHtml(message.name) + '</span>';
@@ -693,6 +925,13 @@ export class ReaderViewProvider implements vscode.WebviewViewProvider {
 		volumeRange.addEventListener('input', function() {
 			currentVolume = parseInt(volumeRange.value) / 100;
 			volumeValueEl.textContent = volumeRange.value + '%';
+			vscode.postMessage({ type: 'volumeChanged', volume: parseInt(volumeRange.value, 10) });
+		});
+		document.getElementById('openAdvancedSettingsBtn').addEventListener('click', function() {
+			vscode.postMessage({ type: 'openAdvancedSettings' });
+		});
+		document.getElementById('openUserDictionaryBtn').addEventListener('click', function() {
+			vscode.postMessage({ type: 'openUserDictionary' });
 		});
 	})();
 	</script>

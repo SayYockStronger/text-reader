@@ -2,6 +2,9 @@ import * as vscode from 'vscode';
 import { ReaderViewProvider } from './readerPanel';
 import { FileExplorerProvider } from './fileExplorer';
 import { initTokenizer, isTokenizerReady } from './tokenizer';
+import { AdvancedSettingsPanel } from './advancedSettingsPanel';
+import { SettingsStore } from './settingsStore';
+import { UserDictionaryPanel } from './userDictionaryPanel';
 
 export function activate(context: vscode.ExtensionContext) {
 	// インストール・更新後に再読み込みを促す
@@ -11,7 +14,7 @@ export function activate(context: vscode.ExtensionContext) {
 	if (currentVersion && lastVersion !== currentVersion) {
 		context.globalState.update('text-reader.lastVersion', currentVersion);
 		vscode.window.showInformationMessage(
-			'Text Reader がインストール/更新されました。ウィンドウを再読み込みしてください。',
+			'日本語読み上げ がインストール/更新されました。ウィンドウを再読み込みしてください。',
 			'再読み込み'
 		).then(selected => {
 			if (selected === '再読み込み') {
@@ -22,18 +25,27 @@ export function activate(context: vscode.ExtensionContext) {
 
 	// kuromoji 辞書を非同期に初期化
 	initTokenizer(context.extensionPath).then(() => {
-		vscode.window.setStatusBarMessage('Text Reader: 辞書を読み込みました', 3000);
+		vscode.window.setStatusBarMessage('日本語読み上げ: 辞書を読み込みました', 3000);
 	}).catch(err => {
-		vscode.window.showWarningMessage(`Text Reader: 辞書の読み込みに失敗しました: ${err.message}`);
+		vscode.window.showWarningMessage(`日本語読み上げ: 辞書の読み込みに失敗しました: ${err.message}`);
 	});
 
 	const statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
 	statusBarItem.command = 'text-reader.pauseResume';
-	statusBarItem.text = '$(unmute) Text Reader';
+	statusBarItem.text = '$(unmute) 日本語読み上げ';
 	statusBarItem.tooltip = 'テキスト読み上げ';
 	context.subscriptions.push(statusBarItem);
 
-	const provider = new ReaderViewProvider(context, statusBarItem);
+	const settingsStore = new SettingsStore(context);
+
+	const provider = new ReaderViewProvider(context, statusBarItem, {
+		getSettings: () => settingsStore.getSettings(),
+		getDictionary: () => settingsStore.getDictionary(),
+		getPlayerPreferences: () => settingsStore.getPlayerPreferences(),
+		savePlayerPreferences: (next) => settingsStore.savePlayerPreferences(next),
+		onOpenAdvancedSettings: () => AdvancedSettingsPanel.show(context, settingsStore),
+		onOpenUserDictionary: () => UserDictionaryPanel.show(context, settingsStore)
+	});
 	context.subscriptions.push(
 		vscode.window.registerWebviewViewProvider(ReaderViewProvider.viewType, provider, {
 			webviewOptions: { retainContextWhenHidden: true }
@@ -96,6 +108,18 @@ export function activate(context: vscode.ExtensionContext) {
 	);
 
 	context.subscriptions.push(
+		vscode.commands.registerCommand('text-reader.openAdvancedSettings', () => {
+			AdvancedSettingsPanel.show(context, settingsStore);
+		})
+	);
+
+	context.subscriptions.push(
+		vscode.commands.registerCommand('text-reader.openUserDictionary', () => {
+			UserDictionaryPanel.show(context, settingsStore);
+		})
+	);
+
+	context.subscriptions.push(
 		vscode.commands.registerCommand('text-reader.readAll', () => {
 			const editor = vscode.window.activeTextEditor;
 			if (!editor) {
@@ -144,7 +168,7 @@ export function activate(context: vscode.ExtensionContext) {
 
 	context.subscriptions.push(
 		vscode.commands.registerCommand('text-reader.setSpeed', async () => {
-			const speeds = ['1.0', '1.25', '1.5', '1.75', '2.0', '2.25', '2.5', '2.75', '3.0'];
+			const speeds = ['1.0', '2.0', '3.0', '4.0', '5.0'];
 			const picked = await vscode.window.showQuickPick(speeds, {
 				placeHolder: '読み上げ速度を選択してください'
 			});

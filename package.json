@@ -1,10 +1,25 @@
 {
   "name": "text-reader",
-  "displayName": "Text Reader",
-  "description": "テキストファイルの内容を日本語で読み上げるVS Code拡張機能",
+  "displayName": "日本語読み上げ",
+  "description": "テキストファイルを日本語で読み上げるVS Code拡張機能。ユーザー辞書・詳細設定・音声/速度/音量の自動保存・設定のJSON移行に対応。",
   "version": "0.0.1",
-  "publisher": "text-reader",
+  "publisher": "SayYockStronger",
+  "license": "MIT",
   "icon": "images/icon.png",
+  "keywords": [
+    "tts",
+    "text-to-speech",
+    "japanese",
+    "読み上げ",
+    "音声",
+    "kuromoji",
+    "辞書",
+    "小説"
+  ],
+  "galleryBanner": {
+    "color": "#2b2d30",
+    "theme": "dark"
+  },
   "engines": {
     "vscode": "^1.116.0"
   },
@@ -20,7 +35,7 @@
       "activitybar": [
         {
           "id": "text-reader",
-          "title": "Text Reader",
+          "title": "日本語読み上げ",
           "icon": "$(unmute)"
         }
       ]
@@ -41,11 +56,11 @@
     "commands": [
       {
         "command": "text-reader.selectFile",
-        "title": "Text Reader: ファイルを選択"
+        "title": "日本語読み上げ: ファイルを選択"
       },
       {
         "command": "text-reader.openFile",
-        "title": "Text Reader: ファイルを開く"
+        "title": "日本語読み上げ: ファイルを開く"
       },
       {
         "command": "text-reader.refreshFiles",
@@ -54,23 +69,31 @@
       },
       {
         "command": "text-reader.readAll",
-        "title": "Text Reader: ファイル全体を読み上げ"
+        "title": "日本語読み上げ: ファイル全体を読み上げ"
       },
       {
         "command": "text-reader.readFromCursor",
-        "title": "Text Reader: カーソル位置から読み上げ"
+        "title": "日本語読み上げ: カーソル位置から読み上げ"
       },
       {
         "command": "text-reader.pauseResume",
-        "title": "Text Reader: 一時停止/再開"
+        "title": "日本語読み上げ: 一時停止/再開"
       },
       {
         "command": "text-reader.stop",
-        "title": "Text Reader: 停止"
+        "title": "日本語読み上げ: 停止"
       },
       {
         "command": "text-reader.setSpeed",
-        "title": "Text Reader: 読み上げ速度を設定"
+        "title": "日本語読み上げ: 読み上げ速度を設定"
+      },
+      {
+        "command": "text-reader.openAdvancedSettings",
+        "title": "日本語読み上げ: 詳細設定を開く"
+      },
+      {
+        "command": "text-reader.openUserDictionary",
+        "title": "日本語読み上げ: ユーザー辞書を開く"
       }
     ],
     "menus": {

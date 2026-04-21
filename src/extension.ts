@@ -4,6 +4,22 @@ import { FileExplorerProvider } from './fileExplorer';
 import { initTokenizer, isTokenizerReady } from './tokenizer';
 
 export function activate(context: vscode.ExtensionContext) {
+	// インストール・更新後に再読み込みを促す
+	const ext = vscode.extensions.getExtension('text-reader.text-reader');
+	const currentVersion = ext?.packageJSON?.version as string | undefined ?? context.extension.packageJSON.version as string;
+	const lastVersion = context.globalState.get<string>('text-reader.lastVersion');
+	if (currentVersion && lastVersion !== currentVersion) {
+		context.globalState.update('text-reader.lastVersion', currentVersion);
+		vscode.window.showInformationMessage(
+			'Text Reader がインストール/更新されました。ウィンドウを再読み込みしてください。',
+			'再読み込み'
+		).then(selected => {
+			if (selected === '再読み込み') {
+				vscode.commands.executeCommand('workbench.action.reloadWindow');
+			}
+		});
+	}
+
 	// kuromoji 辞書を非同期に初期化
 	initTokenizer(context.extensionPath).then(() => {
 		vscode.window.setStatusBarMessage('Text Reader: 辞書を読み込みました', 3000);
@@ -128,7 +144,7 @@ export function activate(context: vscode.ExtensionContext) {
 
 	context.subscriptions.push(
 		vscode.commands.registerCommand('text-reader.setSpeed', async () => {
-			const speeds = ['1.0', '1.25', '1.5', '1.75', '2.0'];
+			const speeds = ['1.0', '1.25', '1.5', '1.75', '2.0', '2.25', '2.5', '2.75', '3.0'];
 			const picked = await vscode.window.showQuickPick(speeds, {
 				placeHolder: '読み上げ速度を選択してください'
 			});

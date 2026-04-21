@@ -1,8 +1,6 @@
 .vscode/**
 .vscode-test/**
 src/**
-node_modules/**
-!node_modules/kuromoji/**
 .gitignore
 .yarnrc
 vsc-extension-quickstart.md

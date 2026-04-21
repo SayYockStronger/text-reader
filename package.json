@@ -4,13 +4,16 @@
   "description": "テキストファイルの内容を日本語で読み上げるVS Code拡張機能",
   "version": "0.0.1",
   "publisher": "text-reader",
+  "icon": "images/icon.png",
   "engines": {
     "vscode": "^1.116.0"
   },
   "categories": [
     "Other"
   ],
-  "activationEvents": [],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
   "main": "./out/extension.js",
   "contributes": {
     "viewsContainers": {
@@ -121,5 +124,8 @@
   },
   "dependencies": {
     "kuromoji": "^0.1.2"
-  }
+  },
+  "bundledDependencies": [
+    "kuromoji"
+  ]
 }

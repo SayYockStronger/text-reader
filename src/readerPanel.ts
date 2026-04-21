@@ -148,12 +148,13 @@ export class ReaderViewProvider implements vscode.WebviewViewProvider {
 
 	private getHtml(webview: vscode.Webview): string {
 		const nonce = getNonce();
+		const cspSource = webview.cspSource;
 		return /*html*/`<!DOCTYPE html>
 <html lang="ja">
 <head>
 	<meta charset="UTF-8">
 	<meta name="viewport" content="width=device-width, initial-scale=1.0">
-	<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'nonce-${nonce}'; script-src 'nonce-${nonce}';">
+	<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${cspSource} 'nonce-${nonce}'; script-src 'nonce-${nonce}';">
 	<style nonce="${nonce}">
 		body {
 			padding: 12px;
@@ -298,6 +299,10 @@ export class ReaderViewProvider implements vscode.WebviewViewProvider {
 			<option value="1.5">1.5x</option>
 			<option value="1.75">1.75x</option>
 			<option value="2">2.0x</option>
+			<option value="2.25">2.25x</option>
+			<option value="2.5">2.5x</option>
+			<option value="2.75">2.75x</option>
+			<option value="3">3.0x</option>
 		</select>
 	</div>
 	<div class="volume-row">
@@ -337,11 +342,27 @@ export class ReaderViewProvider implements vscode.WebviewViewProvider {
 		const volumeRange = document.getElementById('volumeRange');
 		const volumeValueEl = document.getElementById('volumeValue');
 
+		var synthAvailable = (typeof speechSynthesis !== 'undefined');
+
 		function loadVoices() {
-			const voices = speechSynthesis.getVoices();
+			if (!synthAvailable) {
+				voiceEl.innerHTML = '<option value="">音声合成が利用できません</option>';
+				return;
+			}
+			var voices = [];
+			try { voices = speechSynthesis.getVoices(); } catch(e) { synthAvailable = false; }
+			if (!synthAvailable) {
+				voiceEl.innerHTML = '<option value="">音声合成が利用できません</option>';
+				return;
+			}
 			jaVoices = voices.filter(v => v.lang === 'ja-JP' || v.lang.startsWith('ja'));
 			if (jaVoices.length === 0) {
 				jaVoices = voices;
+			}
+			if (jaVoices.length === 0) {
+				voiceEl.innerHTML = '<option value="">音声が見つかりません</option>';
+				jaVoice = null;
+				return;
 			}
 			var prevValue = voiceEl.value;
 			voiceEl.innerHTML = '';
@@ -358,7 +379,7 @@ export class ReaderViewProvider implements vscode.WebviewViewProvider {
 		}
 
 		loadVoices();
-		if (typeof speechSynthesis !== 'undefined' && speechSynthesis.onvoiceschanged !== undefined) {
+		if (synthAvailable && speechSynthesis.onvoiceschanged !== undefined) {
 			speechSynthesis.addEventListener('voiceschanged', loadVoices);
 		}
 
@@ -468,17 +489,22 @@ export class ReaderViewProvider implements vscode.WebviewViewProvider {
 		}
 
 		function cancelAndWaitReady(callback) {
+			if (!synthAvailable) { callback(); return; }
 			speechSynthesis.cancel();
+			if (!speechSynthesis.speaking) {
+				callback();
+				return;
+			}
 			var attempts = 0;
 			function poll() {
-				if (!speechSynthesis.speaking || attempts >= 50) {
+				if (!speechSynthesis.speaking || attempts >= 20) {
 					callback();
 				} else {
 					attempts++;
-					setTimeout(poll, 20);
+					setTimeout(poll, 10);
 				}
 			}
-			setTimeout(poll, 50);
+			setTimeout(poll, 10);
 		}
 
 		function speakNext() {
@@ -493,6 +519,13 @@ export class ReaderViewProvider implements vscode.WebviewViewProvider {
 				return;
 			}
 
+			if (!synthAvailable) {
+				statusEl.textContent = 'エラー: 音声合成が利用できません';
+				statusEl.className = 'status';
+				isSpeaking = false;
+				return;
+			}
+
 			const utterance = new SpeechSynthesisUtterance(chunks[currentIndex]);
 			utterance.lang = 'ja-JP';
 			utterance.rate = currentSpeed;
@@ -502,8 +535,17 @@ export class ReaderViewProvider implements vscode.WebviewViewProvider {
 			}
 			currentUtterance = utterance;
 
+			var settled = false;
+			var speakTimeout = null;
+
+			utterance.onstart = function() {
+				if (speakTimeout) { clearTimeout(speakTimeout); speakTimeout = null; }
+			};
+
 			utterance.onend = function() {
-				if (gen !== generation) { return; }
+				if (settled || gen !== generation) { return; }
+				settled = true;
+				if (speakTimeout) { clearTimeout(speakTimeout); }
 				currentUtterance = null;
 				currentIndex++;
 				updateProgress();
@@ -511,7 +553,9 @@ export class ReaderViewProvider implements vscode.WebviewViewProvider {
 			};
 
 			utterance.onerror = function(e) {
-				if (gen !== generation) { return; }
+				if (settled || gen !== generation) { return; }
+				settled = true;
+				if (speakTimeout) { clearTimeout(speakTimeout); }
 				if (e.error !== 'canceled' && e.error !== 'interrupted') {
 					currentIndex++;
 					updateProgress();
@@ -519,7 +563,34 @@ export class ReaderViewProvider implements vscode.WebviewViewProvider {
 				}
 			};
 
-			speechSynthesis.speak(utterance);
+			try {
+				speechSynthesis.speak(utterance);
+			} catch(e) {
+				statusEl.textContent = 'エラー: 音声再生に失敗しました';
+				statusEl.className = 'status';
+				isSpeaking = false;
+				return;
+			}
+
+			// Timeout: if onstart doesn't fire within 3s, skip to next chunk
+			speakTimeout = setTimeout(function() {
+				if (settled || gen !== generation) { return; }
+				settled = true;
+				currentUtterance = null;
+				// Try to cancel the stuck utterance
+				try { speechSynthesis.cancel(); } catch(e) {}
+				currentIndex++;
+				updateProgress();
+				if (currentIndex < chunks.length) {
+					speakNext();
+				} else {
+					isSpeaking = false;
+					isPaused = false;
+					updateUI('stopped');
+					textPreviewEl.textContent = '読み上げ完了';
+				}
+			}, 3000);
+
 			updateProgress();
 		}
 
@@ -537,7 +608,7 @@ export class ReaderViewProvider implements vscode.WebviewViewProvider {
 		}
 
 		function togglePauseResume() {
-			if (!isSpeaking) { return; }
+			if (!isSpeaking || !synthAvailable) { return; }
 
 			if (isPaused) {
 				speechSynthesis.resume();
@@ -554,7 +625,7 @@ export class ReaderViewProvider implements vscode.WebviewViewProvider {
 			generation++;
 			isSpeaking = false;
 			isPaused = false;
-			speechSynthesis.cancel();
+			if (synthAvailable) { try { speechSynthesis.cancel(); } catch(e) {} }
 			updateUI('stopped');
 			textPreviewEl.textContent = '';
 		}

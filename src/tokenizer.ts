@@ -12,10 +12,10 @@ export function initTokenizer(extensionPath: string): Promise<void> {
 	if (tokenizer) { return Promise.resolve(); }
 	if (initPromise) { return initPromise; }
 
-	const dicPath = path.join(extensionPath, 'node_modules', 'kuromoji', 'dict');
+	const dicPath = path.join(extensionPath, 'node_modules', 'kuromoji', 'dict') + path.sep;
 
 	initPromise = new Promise<void>((resolve, reject) => {
-		kuromoji.builder({ dicPath: dicPath + path.sep }).build((err, built) => {
+		kuromoji.builder({ dicPath }).build((err, built) => {
 			if (err) {
 				initPromise = null;
 				reject(err);

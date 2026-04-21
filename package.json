@@ -2,7 +2,7 @@
   "name": "text-reader",
   "displayName": "日本語読み上げ",
   "description": "テキストファイルを日本語で読み上げるVS Code拡張機能。ユーザー辞書・詳細設定・音声/速度/音量の自動保存・設定のJSON移行に対応。",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "publisher": "SayYockStronger",
   "license": "MIT",
   "icon": "images/icon.png",

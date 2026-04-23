@@ -4,7 +4,7 @@
 A VS Code extension that reads text files aloud in Japanese. It supports Windows, macOS, and Linux, and works in environments where Japanese voices and the Web Speech API are available.
 
 ![Visual Studio Marketplace Version](https://img.shields.io/visual-studio-marketplace/v/SayYockStronger.text-reader)
-![License](https://img.shields.io/badge/license-MIT-blue)
+![License](https://img.shields.io/badge/license-GPLv3-blue)
 
 ![メイン画面デモ](images/screenshot.gif)
 
@@ -103,4 +103,4 @@ A VS Code extension that reads text files aloud in Japanese. It supports Windows
 
 ## ライセンス / License
 
-MIT
+GPL v3

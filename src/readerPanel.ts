@@ -16,11 +16,17 @@ export class ReaderViewProvider implements vscode.WebviewViewProvider {
 
 	private view?: vscode.WebviewView;
 	private statusBarItem: vscode.StatusBarItem;
+	private readonly highlightDecoration: vscode.TextEditorDecorationType;
+	private playbackRanges: Array<vscode.Range | undefined> = [];
+	private playbackUri: string | undefined;
 	private speed: number = 1.0;
 	private lastEditor: vscode.TextEditor | undefined;
 	private editorListener: vscode.Disposable;
+	private closeDocumentListener: vscode.Disposable;
+	private isPlaybackActive: boolean = false;
 	private selectedFileText: string | undefined;
 	private selectedFilePath: string | undefined;
+	private selectedFileUri: vscode.Uri | undefined;
 	private voiceURI: string = '';
 	private volume: number = 100;
 
@@ -30,6 +36,13 @@ export class ReaderViewProvider implements vscode.WebviewViewProvider {
 		private readonly deps: ReaderViewDependencies
 	) {
 		this.statusBarItem = statusBarItem;
+		this.highlightDecoration = vscode.window.createTextEditorDecorationType({
+			backgroundColor: new vscode.ThemeColor('editor.findMatchHighlightBackground'),
+			border: '1px solid',
+			borderColor: new vscode.ThemeColor('editor.findMatchBorder')
+		});
+		this.context.subscriptions.push(this.highlightDecoration);
+
 		const prefs = this.deps.getPlayerPreferences();
 		this.speed = prefs.speed;
 		this.volume = prefs.volume;
@@ -40,6 +53,15 @@ export class ReaderViewProvider implements vscode.WebviewViewProvider {
 			if (editor) {
 				this.lastEditor = editor;
 			}
+		});
+		this.closeDocumentListener = vscode.workspace.onDidCloseTextDocument(document => {
+			if (!this.isPlaybackActive || !this.playbackUri) {
+				return;
+			}
+			if (document.uri.toString() !== this.playbackUri) {
+				return;
+			}
+			this.stop();
 		});
 	}
 
@@ -60,6 +82,13 @@ export class ReaderViewProvider implements vscode.WebviewViewProvider {
 			switch (message.type) {
 				case 'stateChange':
 					this.updateStatusBar(message.state);
+					this.isPlaybackActive = message.state === 'reading' || message.state === 'paused';
+					if (message.state === 'stopped') {
+						this.clearHighlight();
+					}
+					break;
+				case 'activeChunkChanged':
+					this.highlightChunkAt(message.index, message.isPause);
 					break;
 				case 'speedChanged':
 					this.speed = message.speed;
@@ -74,10 +103,10 @@ export class ReaderViewProvider implements vscode.WebviewViewProvider {
 					void this.persistPlayerPreferences();
 					break;
 				case 'requestReadAll':
-					this.handleReadRequest('all');
+					void this.handleReadRequest('all');
 					break;
 				case 'requestReadFromCursor':
-					this.handleReadRequest('cursor');
+					void this.handleReadRequest('cursor');
 					break;
 				case 'openAdvancedSettings':
 					this.deps.onOpenAdvancedSettings();
@@ -101,6 +130,29 @@ export class ReaderViewProvider implements vscode.WebviewViewProvider {
 	read(text: string) {
 		const prepared = this.prepareText(text);
 		const settings = this.deps.getSettings();
+		const editor = vscode.window.activeTextEditor || this.lastEditor;
+		void this.prepareHighlightTracking(prepared.original, settings.pauseAsMaEnabled, settings.pauseDurationMs, editor?.document.uri, 0);
+		this.view?.webview.postMessage({
+			type: 'read',
+			text: prepared.converted,
+			originalText: prepared.original,
+			speed: this.speed,
+			pauseAsMaEnabled: settings.pauseAsMaEnabled,
+			pauseDurationMs: settings.pauseDurationMs
+		});
+	}
+
+	readFromCursor(editor: vscode.TextEditor) {
+		const lineStart = editor.document.lineAt(editor.selection.active.line).range.start;
+		const cursorOffset = editor.document.offsetAt(lineStart);
+		const text = editor.document.getText().substring(cursorOffset);
+		if (!text.trim()) {
+			vscode.window.showWarningMessage('カーソル位置以降にテキストがありません。');
+			return;
+		}
+		const prepared = this.prepareText(text);
+		const settings = this.deps.getSettings();
+		void this.prepareHighlightTracking(prepared.original, settings.pauseAsMaEnabled, settings.pauseDurationMs, editor.document.uri, cursorOffset);
 		this.view?.webview.postMessage({
 			type: 'read',
 			text: prepared.converted,
@@ -127,16 +179,19 @@ export class ReaderViewProvider implements vscode.WebviewViewProvider {
 
 	setSelectedFile(filePath: string, text: string) {
 		this.selectedFilePath = filePath;
+		this.selectedFileUri = vscode.Uri.file(filePath);
 		this.selectedFileText = text;
 		const name = filePath.replace(/\\/g, '/').split('/').pop() || filePath;
 		this.view?.webview.postMessage({ type: 'fileSelected', name });
 	}
 
 	dispose() {
+		this.clearHighlight();
 		this.editorListener.dispose();
+		this.closeDocumentListener.dispose();
 	}
 
-	private handleReadRequest(mode: 'all' | 'cursor') {
+	private async handleReadRequest(mode: 'all' | 'cursor') {
 		// For cursor mode, always use the active editor's cursor position
 		if (mode === 'cursor') {
 			const editor = vscode.window.activeTextEditor || this.lastEditor;
@@ -144,23 +199,7 @@ export class ReaderViewProvider implements vscode.WebviewViewProvider {
 				vscode.window.showWarningMessage('カーソル位置を取得できません。エディタでファイルを開いてください。');
 				return;
 			}
-			const lineStart = editor.document.lineAt(editor.selection.active.line).range.start;
-			const cursorOffset = editor.document.offsetAt(lineStart);
-			const text = editor.document.getText().substring(cursorOffset);
-			if (!text.trim()) {
-				vscode.window.showWarningMessage('読み上げるテキストがありません。');
-				return;
-			}
-			const prepared = this.prepareText(text);
-			const settings = this.deps.getSettings();
-			this.view?.webview.postMessage({
-				type: 'read',
-				text: prepared.converted,
-				originalText: prepared.original,
-				speed: this.speed,
-				pauseAsMaEnabled: settings.pauseAsMaEnabled,
-				pauseDurationMs: settings.pauseDurationMs
-			});
+			this.readFromCursor(editor);
 			return;
 		}
 		// Prefer selected file from explorer, fallback to active editor
@@ -172,6 +211,7 @@ export class ReaderViewProvider implements vscode.WebviewViewProvider {
 			}
 			const prepared = this.prepareText(text);
 			const settings = this.deps.getSettings();
+			await this.prepareHighlightTracking(prepared.original, settings.pauseAsMaEnabled, settings.pauseDurationMs, this.selectedFileUri, 0);
 			this.view?.webview.postMessage({
 				type: 'read',
 				text: prepared.converted,
@@ -194,6 +234,7 @@ export class ReaderViewProvider implements vscode.WebviewViewProvider {
 		}
 		const prepared = this.prepareText(allText);
 		const settings = this.deps.getSettings();
+		await this.prepareHighlightTracking(prepared.original, settings.pauseAsMaEnabled, settings.pauseDurationMs, editor.document.uri, 0);
 		this.view?.webview.postMessage({
 			type: 'read',
 			text: prepared.converted,
@@ -246,6 +287,116 @@ export class ReaderViewProvider implements vscode.WebviewViewProvider {
 			volume: this.volume,
 			voiceURI: this.voiceURI
 		});
+	}
+
+	private async prepareHighlightTracking(
+		originalText: string,
+		enablePauseAsMa: boolean,
+		pauseMs: number,
+		sourceUri: vscode.Uri | undefined,
+		startOffset: number
+	): Promise<void> {
+		this.playbackUri = undefined;
+		this.playbackRanges = [];
+		this.clearHighlight();
+		if (!sourceUri) {
+			return;
+		}
+
+		let document = vscode.workspace.textDocuments.find((doc) => doc.uri.toString() === sourceUri.toString());
+		if (!document) {
+			try {
+				document = await vscode.workspace.openTextDocument(sourceUri);
+			} catch {
+				return;
+			}
+		}
+
+		const docText = document.getText();
+		let searchOffset = Math.max(0, Math.min(startOffset, docText.length));
+		const chunks = this.splitTextForDisplay(originalText, enablePauseAsMa, pauseMs);
+		const ranges: Array<vscode.Range | undefined> = [];
+
+		for (const chunk of chunks) {
+			if (this.isPauseToken(chunk)) {
+				ranges.push(undefined);
+				continue;
+			}
+			const index = docText.indexOf(chunk, searchOffset);
+			if (index < 0) {
+				ranges.push(undefined);
+				continue;
+			}
+			const start = document.positionAt(index);
+			const end = document.positionAt(index + chunk.length);
+			ranges.push(new vscode.Range(start, end));
+			searchOffset = index + chunk.length;
+		}
+
+		this.playbackUri = document.uri.toString();
+		this.playbackRanges = ranges;
+	}
+
+	private splitTextForDisplay(text: string, enablePause: boolean, pauseMs: number): string[] {
+		const lines = text.split('\n');
+		const result: string[] = [];
+		const pauseToken = `__TR_PAUSE_${pauseMs}__`;
+		for (const line of lines) {
+			const trimmed = line.trim();
+			if (!trimmed) {
+				continue;
+			}
+			if (!enablePause) {
+				result.push(trimmed);
+				continue;
+			}
+			const marked = trimmed.replace(/(……+|――+)/g, '__TR_PAUSE__');
+			const parts = marked.split('__TR_PAUSE__');
+			for (let i = 0; i < parts.length; i++) {
+				const part = parts[i].trim();
+				if (part) {
+					result.push(part);
+				}
+				if (i < parts.length - 1) {
+					result.push(pauseToken);
+				}
+			}
+		}
+		return result.length > 0 ? result : [text.trim()];
+	}
+
+	private isPauseToken(chunk: string): boolean {
+		return /^__TR_PAUSE_[0-9]+__$/.test(chunk);
+	}
+
+	private highlightChunkAt(index: unknown, isPause: unknown): void {
+		if (typeof index !== 'number' || !Number.isInteger(index) || index < 0) {
+			return;
+		}
+		if (isPause === true) {
+			return;
+		}
+		if (!this.playbackUri || this.playbackRanges.length === 0 || index >= this.playbackRanges.length) {
+			return;
+		}
+		const range = this.playbackRanges[index];
+		if (!range) {
+			return;
+		}
+
+		for (const editor of vscode.window.visibleTextEditors) {
+			if (editor.document.uri.toString() !== this.playbackUri) {
+				continue;
+			}
+			editor.setDecorations(this.highlightDecoration, [range]);
+			editor.revealRange(range, vscode.TextEditorRevealType.InCenterIfOutsideViewport);
+		}
+	}
+
+	private clearHighlight(): void {
+		for (const editor of vscode.window.visibleTextEditors) {
+			editor.setDecorations(this.highlightDecoration, []);
+		}
 	}
 
 	private updateStatusBar(state: string) {
@@ -674,6 +825,12 @@ export class ReaderViewProvider implements vscode.WebviewViewProvider {
 			} else {
 				progressEl.textContent = '';
 			}
+			const isPause = currentIndex < displayChunks.length ? isPauseToken(displayChunks[currentIndex]) : false;
+			vscode.postMessage({
+				type: 'activeChunkChanged',
+				index: currentIndex,
+				isPause: isPause
+			});
 			if (currentIndex < displayChunks.length) {
 				if (isPauseToken(displayChunks[currentIndex])) {
 					textPreviewEl.textContent = '（間）';

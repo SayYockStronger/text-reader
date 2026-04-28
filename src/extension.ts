@@ -142,15 +142,7 @@ export function activate(context: vscode.ExtensionContext) {
 				vscode.window.showWarningMessage('アクティブなエディタがありません。');
 				return;
 			}
-			const document = editor.document;
-			const lineStart = document.lineAt(editor.selection.active.line).range.start;
-			const cursorOffset = document.offsetAt(lineStart);
-			const text = document.getText().substring(cursorOffset);
-			if (!text.trim()) {
-				vscode.window.showWarningMessage('カーソル位置以降にテキストがありません。');
-				return;
-			}
-			provider.read(text);
+			provider.readFromCursor(editor);
 		})
 	);
 
